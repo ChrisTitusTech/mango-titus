@@ -12,282 +12,137 @@ PKG_CACHE_READY=0
 TOTAL_STEPS=5
 CURRENT_STEP=0
 
-command_exists() {
-	command -v "$1" >/dev/null 2>&1
-}
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+log_info()       { printf '[INFO] %s\n' "$*"; }
+log_warn()       { printf '[WARN] %s\n' "$*"; }
+log_error()      { printf '[ERROR] %s\n' "$*" >&2; }
+die()            { log_error "$*"; exit 1; }
+require_file()   { [[ -f "$1" ]] || die "Required file not found: $1"; }
 
-if command_exists sudo; then
-	SUDO="sudo"
-else
-	SUDO=""
-fi
-
-log_info() {
-	printf '[INFO] %s\n' "$*"
-}
-
-log_warn() {
-	printf '[WARN] %s\n' "$*"
-}
-
-log_error() {
-	printf '[ERROR] %s\n' "$*" >&2
-}
+SUDO="$(command_exists sudo && echo sudo || echo '')"
 
 step() {
 	CURRENT_STEP=$((CURRENT_STEP + 1))
 	printf '\n[%d/%d] %s\n' "$CURRENT_STEP" "$TOTAL_STEPS" "$*"
 }
 
-die() {
-	log_error "$*"
-	exit 1
-}
-
-on_error() {
-	local exit_code="$1"
-	local line_no="$2"
-	local command="$3"
-	log_error "Command failed at line $line_no: $command"
-	exit "$exit_code"
-}
-
-trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
-
-require_file() {
-	local file_path="$1"
-	[[ -f "$file_path" ]] || die "Required file not found: $file_path"
-}
+trap 'log_error "Command failed at line $LINENO: $BASH_COMMAND"; exit $?' ERR
 
 ensure_pkg_metadata() {
 	local manager="$1"
-	if [[ "$PKG_CACHE_READY" -eq 1 ]]; then
-		return
-	fi
-
+	[[ "$PKG_CACHE_READY" -eq 1 ]] && return
+	log_info "Refreshing $manager package metadata"
 	case "$manager" in
-		apt)
-			log_info "Refreshing apt package metadata"
-			$SUDO apt-get update
-			;;
-		dnf)
-			log_info "Refreshing dnf package metadata"
-			$SUDO dnf makecache
-			;;
-		pacman)
-			log_info "Refreshing pacman package metadata"
-			$SUDO pacman -Sy --noconfirm
-			;;
-		zypper)
-			log_info "Refreshing zypper package metadata"
-			$SUDO zypper --non-interactive refresh
-			;;
-		*)
-			die "Unsupported package manager: $manager"
-			;;
+		apt)    $SUDO apt-get update ;;
+		dnf)    $SUDO dnf makecache ;;
+		pacman) $SUDO pacman -Sy --noconfirm ;;
+		zypper) $SUDO zypper --non-interactive refresh ;;
+		*)      die "Unsupported package manager: $manager" ;;
 	esac
-
 	PKG_CACHE_READY=1
 }
 
 package_exists() {
-	local manager="$1"
-	local package="$2"
-
+	local manager="$1" package="$2"
 	case "$manager" in
-		apt)
-			apt-cache show "$package" >/dev/null 2>&1
-			;;
-		dnf)
-			dnf info "$package" >/dev/null 2>&1
-			;;
-		pacman)
-			pacman -Si "$package" >/dev/null 2>&1
-			;;
-		zypper)
-			zypper --non-interactive info "$package" >/dev/null 2>&1
-			;;
-		*)
-			return 1
-			;;
+		apt)    apt-cache show "$package" >/dev/null 2>&1 ;;
+		dnf)    dnf info "$package" >/dev/null 2>&1 ;;
+		pacman) pacman -Si "$package" >/dev/null 2>&1 ;;
+		zypper) zypper --non-interactive info "$package" >/dev/null 2>&1 ;;
+		*)      return 1 ;;
 	esac
 }
 
 package_installed() {
-	local manager="$1"
-	local package="$2"
-
+	local manager="$1" package="$2"
 	case "$manager" in
-		apt)
-			dpkg -s "$package" >/dev/null 2>&1
-			;;
-		dnf)
-			rpm -q "$package" >/dev/null 2>&1
-			;;
-		pacman)
-			pacman -Q "$package" >/dev/null 2>&1
-			;;
-		zypper)
-			rpm -q "$package" >/dev/null 2>&1
-			;;
-		*)
-			return 1
-			;;
+		apt)        dpkg -s "$package" >/dev/null 2>&1 ;;
+		dnf|zypper) rpm -q "$package" >/dev/null 2>&1 ;;
+		pacman)     pacman -Q "$package" >/dev/null 2>&1 ;;
+		*)          return 1 ;;
 	esac
 }
 
 install_repo_package_if_available() {
-	local manager="$1"
-	local package="$2"
-	local label="$3"
-
+	local manager="$1" package="$2" label="$3"
 	if ! package_exists "$manager" "$package"; then
-		log_warn "$package package not found in $manager repositories"
+		log_warn "$package not found in $manager repositories"
 		return 1
 	fi
-
-	log_info "Found $package package, installing"
-	if run_pkg_install "$manager" "$package"; then
-		log_info "$label installed from package manager"
-		return 0
-	fi
-
-	log_warn "$package package install failed"
-	return 1
+	log_info "Found $package, installing as $label"
+	run_pkg_install "$manager" "$package"
+	log_info "$label installed from package manager"
 }
 
 choose_first_available_package() {
-	local manager="$1"
-	local label="$2"
-	shift 2
-
-	local candidate
+	local manager="$1" label="$2"; shift 2
 	for candidate in "$@"; do
-		if package_exists "$manager" "$candidate"; then
-			echo "$candidate"
-			return 0
-		fi
+		package_exists "$manager" "$candidate" && { echo "$candidate"; return 0; }
 	done
-
 	die "Could not find a package for $label in $manager repositories. Tried: $*"
 }
 
 choose_latest_pacman_wlroots_package() {
-	if package_exists pacman wlroots; then
-		echo "wlroots"
-		return 0
-	fi
-
-	local candidate
-	local latest=""
-	local latest_minor=-1
-
+	package_exists pacman wlroots && { echo "wlroots"; return 0; }
+	local latest="" latest_minor=-1 candidate
 	while IFS= read -r candidate; do
-		if [[ "$candidate" =~ ^wlroots0\.([0-9]+)$ ]]; then
-			local minor_version="${BASH_REMATCH[1]}"
-			if (( minor_version > latest_minor )); then
-				latest_minor="$minor_version"
-				latest="$candidate"
-			fi
+		if [[ "$candidate" =~ ^wlroots0\.([0-9]+)$ ]] && (( BASH_REMATCH[1] > latest_minor )); then
+			latest_minor="${BASH_REMATCH[1]}"
+			latest="$candidate"
 		fi
 	done < <(pacman -Ssq '^wlroots0\.[0-9]+$' 2>/dev/null || true)
-
-	if [[ -n "$latest" ]]; then
-		echo "$latest"
-		return 0
-	fi
-
+	[[ -n "$latest" ]] && { echo "$latest"; return 0; }
 	die "Could not find a wlroots package in pacman repositories (expected wlroots or wlroots0.x)."
 }
 
 run_pkg_install() {
-	local manager="$1"
-	shift
+	local manager="$1"; shift
 	ensure_pkg_metadata "$manager"
 	log_info "Installing packages: $*"
 	case "$manager" in
-		apt)
-			$SUDO apt-get install -y "$@"
-			;;
-		dnf)
-			$SUDO dnf install -y "$@"
-			;;
-		pacman)
-			$SUDO pacman -S --needed --noconfirm "$@"
-			;;
-		zypper)
-			$SUDO zypper --non-interactive install "$@"
-			;;
-		*)
-			die "Unsupported package manager: $manager"
-			;;
+		apt)    $SUDO apt-get install -y "$@" ;;
+		dnf)    $SUDO dnf install -y "$@" ;;
+		pacman) $SUDO pacman -S --needed --noconfirm "$@" ;;
+		zypper) $SUDO zypper --non-interactive install "$@" ;;
+		*)      die "Unsupported package manager: $manager" ;;
 	esac
 }
 
 install_optional_packages() {
-	local manager="$1"
-	shift
-
-	local package
-	local available_packages=()
-	local missing_packages=()
-
-	for package in "$@"; do
-		if package_exists "$manager" "$package"; then
-			available_packages+=("$package")
-		else
-			missing_packages+=("$package")
+	local manager="$1"; shift
+	local available=() missing=()
+	for pkg in "$@"; do
+		if package_exists "$manager" "$pkg"; then available+=("$pkg")
+		else missing+=("$pkg")
 		fi
 	done
-
-	if ((${#available_packages[@]} > 0)); then
-		log_info "Installing optional packages: ${available_packages[*]}"
-		run_pkg_install "$manager" "${available_packages[@]}"
+	if ((${#available[@]} > 0)); then
+		log_info "Installing optional packages: ${available[*]}"
+		run_pkg_install "$manager" "${available[@]}"
 	fi
-
-	if ((${#missing_packages[@]} > 0)); then
-		log_warn "Optional packages not found in $manager repositories: ${missing_packages[*]}"
+	if ((${#missing[@]} > 0)); then
+		log_warn "Optional packages not found in $manager repositories: ${missing[*]}"
 	fi
-}
-
-try_install_mangowc_aur() {
-	if try_install_aur_package mangowc-git; then
-		return 0
-	fi
-
-	return 1
 }
 
 try_install_aur_package() {
 	local package="$1"
-
 	if command_exists yay; then
 		log_info "Trying AUR package $package via yay"
-		yay -S --needed --noconfirm "$package"
-		return $?
-	fi
-
-	if command_exists paru; then
+		yay -S --needed --noconfirm --answerdiff=None --answerclean=None "$package"
+	elif command_exists paru; then
 		log_info "Trying AUR package $package via paru"
 		paru -S --needed --noconfirm "$package"
-		return $?
+	else
+		return 1
 	fi
-
-	return 1
 }
 
 install_noctalia_manual_release() {
 	local target_dir="$HOME/.config/quickshell/noctalia-shell"
 	local release_url="https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz"
-
-	if ! command_exists curl; then
-		die "curl is required for manual Noctalia installation"
-	fi
-
-	if ! command_exists tar; then
-		die "tar is required for manual Noctalia installation"
-	fi
-
+	command_exists curl || die "curl is required for manual Noctalia installation"
+	command_exists tar  || die "tar is required for manual Noctalia installation"
 	log_info "Installing Noctalia shell manually to $target_dir"
 	mkdir -p "$target_dir"
 	curl -fsSL "$release_url" | tar -xz --strip-components=1 -C "$target_dir"
@@ -295,12 +150,10 @@ install_noctalia_manual_release() {
 }
 
 install_noctalia_from_repo() {
-	local repo_url="$1"
 	local target_dir="$HOME/.config/quickshell/noctalia-shell"
-
-	log_info "Installing Noctalia shell from source repo: $repo_url"
+	log_info "Cloning Noctalia shell from $1"
 	rm -rf "$target_dir"
-	git clone --depth=1 "$repo_url" "$target_dir"
+	git clone --depth=1 "$1" "$target_dir"
 	log_info "Noctalia shell cloned to $target_dir"
 }
 
@@ -330,12 +183,10 @@ install_dependencies() {
 				libdisplay-info-devel libliftoff-devel hwdata pcre2-devel scenefx-devel
 			;;
 		pacman)
-			local wlroots_pkg
-			local libseat_pkg
+			local wlroots_pkg libseat_pkg
 			wlroots_pkg="$(choose_latest_pacman_wlroots_package)"
 			libseat_pkg="$(choose_first_available_package "$manager" "libseat" libseat seatd)"
-			log_info "Using wlroots package: $wlroots_pkg"
-			log_info "Using libseat package: $libseat_pkg"
+			log_info "Using wlroots: $wlroots_pkg  libseat: $libseat_pkg"
 
 			run_pkg_install "$manager" \
 				base-devel git meson ninja pkgconf cmake curl wayland \
@@ -364,75 +215,38 @@ install_dependencies() {
 }
 
 detect_pkg_manager() {
-	local manager
-	for manager in apt dnf pacman zypper; do
-		case "$manager" in
-			apt)
-				if command_exists apt-get; then
-					echo "$manager"
-					return
-				fi
-				;;
-			dnf|pacman|zypper)
-				if command_exists "$manager"; then
-					echo "$manager"
-					return
-				fi
-				;;
-		esac
+	command_exists apt-get && { echo apt; return; }
+	for manager in dnf pacman zypper; do
+		command_exists "$manager" && { echo "$manager"; return; }
 	done
-
 	echo ""
 }
 
-try_install_mangowc_package() {
-	local manager="$1"
-	ensure_pkg_metadata "$manager"
-	install_repo_package_if_available "$manager" "mangowc" "MangoWC"
-}
-
 build_mangowc_from_source() {
-	local repo_url="$1"
-	local tmp_dir
-	local repo_dir
-	tmp_dir="$(mktemp -d)"
-	repo_dir="$tmp_dir/mangowc"
-	log_info "Building MangoWC from source: $repo_url"
-	git clone --depth=1 "$repo_url" "$repo_dir"
-	(
-		cd "$repo_dir"
-		meson setup build
-		ninja -C build
-		$SUDO ninja -C build install
-	)
+	local tmp_dir; tmp_dir="$(mktemp -d)"
+	local repo_dir="$tmp_dir/mangowc"
+	log_info "Building MangoWC from source: $1"
+	git clone --depth=1 "$1" "$repo_dir"
+	(cd "$repo_dir" && meson setup build && ninja -C build && $SUDO ninja -C build install)
 	rm -rf "$tmp_dir"
 }
 
 install_mangowc() {
 	local manager="$1"
 	step "Installing MangoWC"
-	if command -v mangowc >/dev/null 2>&1; then
-		log_info "MangoWC is already installed"
-		return
-	fi
+	command_exists mangowc && { log_info "MangoWC is already installed"; return; }
 
-	if try_install_mangowc_package "$manager"; then
-		log_info "MangoWC installed from package manager"
-		return
-	fi
+	if install_repo_package_if_available "$manager" mangowc "MangoWC"; then return; fi
 
 	if [[ "$manager" == "pacman" ]]; then
-		if try_install_mangowc_aur; then
+		if try_install_aur_package mangowc-git; then
 			log_info "MangoWC installed from AUR package"
 			return
 		fi
 		log_warn "Could not install mangowc-git via AUR helper"
 	fi
 
-	if [[ -z "$MANGOWC_REPO" ]]; then
-		die "Could not install mangowc from package manager/AUR. Set MANGOWC_REPO to a valid git URL to build from source."
-	fi
-
+	[[ -z "$MANGOWC_REPO" ]] && die "Could not install mangowc from package manager/AUR. Set MANGOWC_REPO to a valid git URL to build from source."
 	build_mangowc_from_source "$MANGOWC_REPO"
 }
 
@@ -445,10 +259,9 @@ install_config() {
 
 run_post_install_checks() {
 	local manager="$1"
-	step "Running post-install checks"
-
+	local noctalia_dir="$HOME/.config/quickshell/noctalia-shell"
 	local failures=0
-	local noctalia_manual_dir="$HOME/.config/quickshell/noctalia-shell"
+	step "Running post-install checks"
 
 	if command_exists mangowc || command_exists mango; then
 		log_info "MangoWC binary check passed"
@@ -464,25 +277,19 @@ run_post_install_checks() {
 		failures=$((failures + 1))
 	fi
 
-	if command_exists noctalia-shell; then
-		log_info "Noctalia shell binary check passed"
-	elif package_installed "$manager" noctalia-shell; then
-		log_info "Noctalia package check passed"
-	elif [[ -d "$noctalia_manual_dir" ]]; then
+	if command_exists noctalia-shell || package_installed "$manager" noctalia-shell; then
+		log_info "Noctalia shell check passed"
+	elif [[ -d "$noctalia_dir" ]]; then
 		if command_exists qs; then
-			log_info "Noctalia manual install check passed: $noctalia_manual_dir"
-			log_info "Launch with: qs -p $noctalia_manual_dir"
+			log_info "Noctalia manual install found: $noctalia_dir  (launch: qs -p $noctalia_dir)"
 		else
-			log_warn "Noctalia files found at $noctalia_manual_dir, but 'qs' is not installed"
+			log_warn "Noctalia files found at $noctalia_dir, but 'qs' is not installed"
 		fi
 	else
 		log_warn "Noctalia shell was not detected in PATH or manual install directory"
 	fi
 
-	if ((failures > 0)); then
-		die "Post-install checks failed ($failures issue(s))."
-	fi
-
+	((failures > 0)) && die "Post-install checks failed ($failures issue(s))."
 	log_info "Post-install checks completed"
 }
 
@@ -491,9 +298,7 @@ setup_noctalia() {
 	step "Setting up Noctalia"
 	ensure_pkg_metadata "$manager"
 
-	if install_repo_package_if_available "$manager" "noctalia-shell" "Noctalia shell"; then
-		return
-	fi
+	if install_repo_package_if_available "$manager" noctalia-shell "Noctalia shell"; then return; fi
 
 	if [[ "$manager" == "pacman" ]]; then
 		if try_install_aur_package noctalia-shell || try_install_aur_package noctalia-shell-git; then
@@ -512,14 +317,9 @@ setup_noctalia() {
 }
 
 main() {
-	local manager
 	require_file "$CONFIG_SOURCE"
-	manager="$(detect_pkg_manager)"
-
-	if [[ -z "$manager" ]]; then
-		die "No supported package manager found (apt, dnf, pacman, zypper)."
-	fi
-
+	local manager; manager="$(detect_pkg_manager)"
+	[[ -z "$manager" ]] && die "No supported package manager found (apt, dnf, pacman, zypper)."
 	log_info "Detected package manager: $manager"
 
 	install_dependencies "$manager"
