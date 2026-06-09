@@ -69,7 +69,7 @@ if [ -d "$CONFIG_DIR/mango" ]; then
 fi
 
 echo "📥 Cloning ChrisTitusTech/mango-titus directly into configuration path..."
-git clone https://github.com/ChrisTitusTech/mango-titus/ /tmp/mango-titus
+git clone https://github.com/Real-MullaC/mango-titus-1/ /tmp/mango-titus
 mv /tmp/mango-titus/mango "$CONFIG_DIR/mango"
 rm -rf /tmp/mango-titus
 
