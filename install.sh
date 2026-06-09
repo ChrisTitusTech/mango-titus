@@ -53,7 +53,7 @@ echo "----------------------------------------------------"
 if [ -d "$CONFIG_DIR/mango" ]; then
     mv "$CONFIG_DIR/mango" "$CONFIG_DIR/mango.bak"
 fi
-git clone https://github.com/ChrisTitusTech/mango-titus/ /tmp/mango-titus
+git clone https://github.com/Real-MullaC/mango-titus-1/ /tmp/mango-titus
 mkdir -p "$CONFIG_DIR/mango"
 cp -r /tmp/mango-titus/. "$CONFIG_DIR/mango/"
 rm -rf /tmp/mango-titus
