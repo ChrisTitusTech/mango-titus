@@ -1,4 +1,3 @@
-#!/bash/bin
 #!/bin/bash
 
 echo "===================================================="
@@ -66,11 +65,21 @@ else
     cd "$WALLPAPER_DIR/nord-background" && git pull && cd - > /dev/null
 fi
 
+# Helper function to send IPC rules safely only if DMS is active
+safe_dms_ipc() {
+    if command -v dms &> /dev/null; then
+        # Check if the DMS server socket or process is actually running to avoid 255 errors
+        if pgrep -x "qs" &> /dev/null || pgrep -x "dms" &> /dev/null; then
+            dms ipc call "$@" 2>/dev/null
+        else
+            echo "ℹ️  DMS is not currently running. Skipping live configuration inject."
+        fi
+    fi
+}
+
 # 5. INITIALIZE THE RUNTIME BACKGROUND DEPLOYMENTS
-if command -v dms &> /dev/null; then
-    sleep 2
-    dms ipc call wallpaper set "$TARGET_WALLPAPER"
-fi
+sleep 2
+safe_dms_ipc wallpaper set "$TARGET_WALLPAPER"
 
 # 6. KEYBOARD INTERACTIVE SELECTION FUNCTION
 choose_from_menu() {
@@ -79,44 +88,38 @@ choose_from_menu() {
     local options=("$@")
     local selected=0
 
-    # Hide screen cursor during choice loop
     tput civis
     trap 'tput cnorm; exit 1' INT TERM
 
     while true; do
-        # Clear menu area lines
         echo -e "\n$title"
         for i in "${!options[@]}"; do
             if [ "$i" -eq "$selected" ]; then
-                # Highlight option with an arrow pointer
                 echo -e "  \e[1;32m➔  ${options[$i]}\e[0m"
             else
                 echo -e "     ${options[$i]}"
             fi
         done
 
-        # Read specific keyboard input hardware hex codes (3 bytes for arrow keys)
         read -rsn1 key
         if [[ "$key" == $'\x1b' ]]; then
             read -rsn2 -t 0.1 key
-            if [[ "$key" == "[A" ]]; then # Up Arrow
+            if [[ "$key" == "[A" ]]; then
                 ((selected--))
                 [ "$selected" -lt 0 ] && selected=$((${#options[@]} - 1))
-            elif [[ "$key" == "[B" ]]; then # Down Arrow
+            elif [[ "$key" == "[B" ]]; then
                 ((selected++))
                 [ "$selected" -ge "${#options[@]}" ] && selected=0
             fi
-        elif [[ "$key" == "" ]]; then # Enter Key pressed
+        elif [[ "$key" == "" ]]; then
             break
         fi
 
-        # Clear menu block layout to redraw cleanly over old frames
         lines_to_clear=$((${#options[@]} + 2))
         tput cuu $lines_to_clear
         tput ed
     done
 
-    # Restore default blinking text cursor
     tput cnorm
     return "$selected"
 }
@@ -130,25 +133,21 @@ echo "----------------------------------------------------"
 case $choice in
     0)
         echo "Halting layout background rotation ticks..."
-        if command -v dms &> /dev/null; then dms ipc call wallpaper toggle_cycling false; fi
+        safe_dms_ipc wallpaper toggle_cycling false
         ;;
     1)
         echo "Setting dynamic background transition frame clock to 5 minutes (300s)..."
-        if command -v dms &> /dev/null; then
-            dms ipc call wallpaper toggle_cycling true
-            dms ipc call wallpaper set_mode "interval"
-            dms ipc call wallpaper set_interval 300
-            dms ipc call wallpaper next
-        fi
+        safe_dms_ipc wallpaper toggle_cycling true
+        safe_dms_ipc wallpaper set_mode "interval"
+        safe_dms_ipc wallpaper set_interval 300
+        safe_dms_ipc wallpaper next
         ;;
     2)
         echo "Setting dynamic background transition frame clock to 10 minutes (600s)..."
-        if command -v dms &> /dev/null; then
-            dms ipc call wallpaper toggle_cycling true
-            dms ipc call wallpaper set_mode "interval"
-            dms ipc call wallpaper set_interval 600
-            dms ipc call wallpaper next
-        fi
+        safe_dms_ipc wallpaper toggle_cycling true
+        safe_dms_ipc wallpaper set_mode "interval"
+        safe_dms_ipc wallpaper set_interval 600
+        safe_dms_ipc wallpaper next
         ;;
 esac
 
