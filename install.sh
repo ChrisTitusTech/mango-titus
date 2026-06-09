@@ -15,26 +15,28 @@ mkdir -p "$CONFIG_DIR"
 mkdir -p "$WALLPAPER_DIR"
 
 # 2. DETECT PACKAGE MANAGER & DEPLOY PRIMARY INFRASTRUCTURE
-# Ensuring git, mangowm components, and tools are natively established
 if command -v dnf &> /dev/null; then
     echo "📦 System Identified: Fedora Linux (DNF)."
     echo "----------------------------------------------------"
-    
-    # Configure custom app streams
+
+    # Configure custom app streams & repositories
+    echo "🔧 Registering system repositories for DMS, Ghostty, and MangoWM..."
     sudo dnf copr enable -y avengemedia/dms
     sudo dnf copr enable -y pgdev/ghostty
-    
-    # Bulk install git, headers, desktop stack, and window manager parts
+    sudo dnf copr enable -y gregoryloscombe/mangowc
+
+    # Bulk install git, compiler components, app stacks, and the compositor itself
+    echo "📥 Fetching system dependencies and core window manager binaries..."
     sudo dnf install -y git libX11-devel libXinerama-devel libXft-devel libXrandr-devel imlib2-devel \
-                        swww dms thunar firefox ghostty
+                        swww dms thunar firefox ghostty mangowm
 
 elif command -v pacman &> /dev/null; then
     echo "📦 System Identified: Arch Linux (Pacman + AUR)."
     echo "----------------------------------------------------"
-    
+
     # Update core frameworks and ensure git is present
     sudo pacman -Syu --needed --noconfirm git base-devel libx11 libxinerama libxft libxrandr imlib2 swww thunar firefox
-    
+
     # Locate or bootstrap the AUR wrapper cleanly
     AUR_HELPER=""
     if command -v paru &> /dev/null; then
@@ -47,8 +49,9 @@ elif command -v pacman &> /dev/null; then
         cd /tmp/yay-bin && makepkg -si --noconfirm && cd - > /dev/null
         AUR_HELPER="yay"
     fi
-    
-    # Fetch compositor shell components and terminal environments
+
+    # Fetch compositor components, shell components, and terminal environments
+    echo "📥 Invoking AUR helper to fetch window compositor modules..."
     $AUR_HELPER -S --needed --noconfirm dms-shell-git ghostty mangowm-git
 else
     echo "❌ Unrecognized distribution engine. Halting deployment."
@@ -115,7 +118,7 @@ do
             dms ipc call wallpaper next
             break
             ;;
-        *) 
+        *)
             echo "Invalid selection $REPLY. Please pass an indexing integer from 1 to 3."
             ;;
     esac
